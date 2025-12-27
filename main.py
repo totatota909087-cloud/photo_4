@@ -1,121 +1,136 @@
-import subprocess
+
+#!/usr/bin/env python3
+"""
+بوت تلقي طلبات التطبيقات للمطور حمزه
+إصدار متوافق مع Render.com
+"""
+
+import os
 import sys
 import time
 import threading
-import os
-from flask import Flask, jsonify
-import requests
 import logging
-
-# تثبيت المكتبات المطلوبة تلقائياً
-def install_packages():
-    required_packages = [
-        'python-telegram-bot[job-queue]==20.7',
-        'flask==3.0.0', 
-        'requests==2.31.0'
-    ]
-    
-    print("📦 جاري تثبيت المكتبات المطلوبة...")
-    for package in required_packages:
-        package_name = package.split('==')[0]
-        try:
-            __import__(package_name.replace('-', '_').replace('[job_queue]', ''))
-            print(f"✅ {package_name} مثبت بالفعل")
-        except ImportError:
-            print(f"📦 جاري تثبيت {package}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"✅ تم تثبيت {package} بنجاح")
-
-# تثبيت المكتبات
-install_packages()
-
-# الآن استيراد المكتبات بعد التثبيت
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, ConversationHandler
+from datetime import datetime
 import asyncio
 
-# تمكين التسجيل للتصحيح
+# إعداد logging أولاً
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log')
-    ]
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-# تعريف مراحل المحادثة
-APP_NAME, APP_PHOTO = range(2)
+# محاولة استيراد المكتبات
+try:
+    from telegram import Update
+    from telegram.ext import (
+        Application,
+        CommandHandler,
+        MessageHandler,
+        filters,
+        CallbackContext,
+        ConversationHandler
+    )
+    import flask
+    from flask import Flask, jsonify
+    import requests
+    print("✅ جميع المكتبات مثبتة بالفعل")
+except ImportError as e:
+    print(f"📦 بعض المكتبات غير مثبتة: {e}")
+    print("📦 جاري تثبيت المكتبات المطلوبة...")
+    
+    # تثبيت المكتبات
+    import subprocess
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install",
+        "python-telegram-bot==20.7",
+        "flask==2.3.3",
+        "requests==2.31.0"
+    ])
+    
+    # إعادة استيراد بعد التثبيت
+    from telegram import Update
+    from telegram.ext import (
+        Application,
+        CommandHandler,
+        MessageHandler,
+        filters,
+        CallbackContext,
+        ConversationHandler
+    )
+    from flask import Flask, jsonify
+    import requests
+    print("✅ تم تثبيت جميع المكتبات بنجاح")
 
-# معرف المطور
+# ===== إعدادات البوت =====
+TOKEN = "8494446795:AAHMAZFOI-KHtxSwLAxBtShQxd0c5yhnmC4"
 DEVELOPER_CHAT_ID = "7305720183"
 DEVELOPER_USERNAME = "@jt_r3r"
 
-# بيانات التواصل مع المطور
+# مراحل المحادثة
+APP_NAME, APP_PHOTO = range(2)
+
+# بيانات التواصل
 CONTACT_INFO = f"""
 <b>إذا تأخر تسليم التطبيق لك</b>
 <b>تواصل مع حمزه: {DEVELOPER_USERNAME}</b>
 """
 
-# إنشاء تطبيق Flask
-flask_app = Flask(__name__)
-
-# متغيرات للحالة
+# متغيرات التتبع
 bot_start_time = time.time()
 request_count = 0
+bot_active = False
 
-@flask_app.route('/')
+# ===== Flask Web Server =====
+app = Flask(__name__)
+
+@app.route('/')
 def home():
     global request_count
     request_count += 1
     
-    uptime = time.time() - bot_start_time
-    hours, remainder = divmod(uptime, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    uptime = int(time.time() - bot_start_time)
+    hours = uptime // 3600
+    minutes = (uptime % 3600) // 60
+    seconds = uptime % 60
     
     return jsonify({
         "status": "online",
-        "service": "Telegram Bot",
-        "uptime": f"{int(hours)}h {int(minutes)}m {int(seconds)}s",
-        "request_count": request_count,
-        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "message": "✅ البوت يعمل بنجاح!",
+        "bot": "running" if bot_active else "starting",
+        "uptime": f"{hours}h {minutes}m {seconds}s",
+        "requests": request_count,
+        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "service": "Telegram App Request Bot",
         "developer": DEVELOPER_USERNAME
     })
 
-@flask_app.route('/health')
-def health_check():
+@app.route('/health')
+def health():
     return jsonify({
         "status": "healthy",
-        "bot": "running",
-        "flask": "running",
-        "timestamp": time.time()
+        "bot_active": bot_active,
+        "timestamp": datetime.now().isoformat()
     })
 
-@flask_app.route('/keepalive')
-def keep_alive_endpoint():
+@app.route('/keepalive')
+def keepalive():
     return jsonify({
-        "message": "Keep-alive successful",
-        "time": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "message": "Keep-alive triggered",
+        "time": datetime.now().strftime('%H:%M:%S'),
         "status": "active"
     })
 
-@flask_app.route('/logs')
-def show_logs():
-    try:
-        with open('bot.log', 'r') as f:
-            logs = f.read()
-        return f"<pre>{logs[-5000:]}</pre>"
-    except:
-        return "No logs available"
+@app.route('/ping')
+def ping():
+    return "pong", 200
 
 def run_flask():
     """تشغيل خادم Flask"""
     try:
-        port = int(os.environ.get('PORT', 10000))
+        port = int(os.getenv('PORT', 8080))
         print(f"🚀 بدء خادم Flask على المنفذ {port}")
-        flask_app.run(
+        app.run(
             host='0.0.0.0',
             port=port,
             debug=False,
@@ -123,56 +138,32 @@ def run_flask():
             threaded=True
         )
     except Exception as e:
-        print(f"❌ خطأ في تشغيل Flask: {e}")
-        logger.error(f"Flask error: {e}")
+        logger.error(f"❌ خطأ في تشغيل Flask: {e}")
 
 # ===== وظائف البوت =====
-async def start(update: Update, context: CallbackContext) -> int:
-    """يبدأ المحادثة ويرسل الرسالة الأولى."""
+async def start_command(update: Update, context: CallbackContext) -> int:
+    """بدء المحادثة"""
     try:
         user = update.effective_user
         
-        welcome_message = """<b>مرحبا بك 👋</b>
+        welcome_msg = """<b>مرحبا بك 👋</b>
 
 <b>1: إرسل الاسم التي تريد التطبيق يظهر به ✅❗</b>
 <b>2: إرسل الصوره التي تريد التطبيق يظهر بها ⚡</b>
 
 <b>وسيتم إنشاء تطبيق سحب الصور بنفس المواصفات اللي سترسلها ✅🥰</b>"""
         
-        await update.message.reply_text(
-            f"{welcome_message}",
-            parse_mode='HTML'
-        )
-        
-        await asyncio.sleep(2)
-        
-        await update.message.reply_text(
-            "<b>إرسل الآن إسم التطبيق</b>",
-            parse_mode='HTML'
-        )
+        await update.message.reply_text(welcome_msg, parse_mode='HTML')
+        await asyncio.sleep(1)
+        await update.message.reply_text("<b>إرسل الآن إسم التطبيق</b>", parse_mode='HTML')
         
         return APP_NAME
     except Exception as e:
-        logger.error(f"Error in start: {e}")
+        logger.error(f"خطأ في start_command: {e}")
         return ConversationHandler.END
 
-async def get_id(update: Update, context: CallbackContext):
-    """يرجع الـ ID الخاص بالمستخدم."""
-    try:
-        user = update.effective_user
-        chat_id = update.effective_chat.id
-        
-        await update.message.reply_text(
-            f"<b>👤 معرفك: {user.id}</b>\n"
-            f"<b>💬 معرف الدردشة: {chat_id}</b>\n\n"
-            f"<b>📝 أرسل المعرف هذا إلى المطور</b>",
-            parse_mode='HTML'
-        )
-    except Exception as e:
-        logger.error(f"Error in get_id: {e}")
-
-async def receive_app_name(update: Update, context: CallbackContext) -> int:
-    """يستقبل اسم التطبيق من المستخدم."""
+async def receive_name(update: Update, context: CallbackContext) -> int:
+    """استقبال اسم التطبيق"""
     try:
         app_name = update.message.text
         context.user_data['app_name'] = app_name
@@ -182,31 +173,29 @@ async def receive_app_name(update: Update, context: CallbackContext) -> int:
         context.user_data['user_username'] = f"@{user.username}" if user.username else "لا يوجد"
         context.user_data['user_id'] = user.id
         
-        await update.message.reply_text(
-            "<b>إرسل الآن صورة التطبيق</b>",
-            parse_mode='HTML'
-        )
-        
+        await update.message.reply_text("<b>إرسل الآن صورة التطبيق</b>", parse_mode='HTML')
         return APP_PHOTO
     except Exception as e:
-        logger.error(f"Error in receive_app_name: {e}")
+        logger.error(f"خطأ في receive_name: {e}")
         return ConversationHandler.END
 
-async def receive_app_photo(update: Update, context: CallbackContext) -> int:
-    """يستقبل صورة التطبيق من المستخدم."""
+async def receive_photo(update: Update, context: CallbackContext) -> int:
+    """استقبال صورة التطبيق"""
     try:
-        user = update.effective_user
         app_name = context.user_data.get('app_name', 'غير محدد')
         user_name = context.user_data.get('user_name', '')
         user_username = context.user_data.get('user_username', '')
         user_id = context.user_data.get('user_id', '')
         
-        if not update.message.photo:
-            await update.message.reply_text("<b>❌ لم يتم إرسال صورة. أرسل صورة من فضلك.</b>", parse_mode='HTML')
+        # الحصول على الصورة
+        if update.message.photo:
+            photo = update.message.photo[-1]
+            photo_file = await photo.get_file()
+        else:
+            await update.message.reply_text("<b>❌ لم يتم إرسال صورة</b>", parse_mode='HTML')
             return APP_PHOTO
         
-        photo_file = await update.message.photo[-1].get_file()
-        
+        # إرسال للمطور
         request_info = f"""<b>📋 طلب تطبيق جديد</b>
 <b>─────────────────────</b>
 <b>👤 المستخدم:</b> <code>{user_name}</code>
@@ -217,19 +206,20 @@ async def receive_app_photo(update: Update, context: CallbackContext) -> int:
 <b>─────────────────────</b>"""
         
         await context.bot.send_message(
-            chat_id=DEVELOPER_CHAT_ID,
-            text=request_info,
+            DEVELOPER_CHAT_ID,
+            request_info,
             parse_mode='HTML'
         )
         
         await context.bot.send_photo(
-            chat_id=DEVELOPER_CHAT_ID,
+            DEVELOPER_CHAT_ID,
             photo=photo_file.file_id,
             caption=f"<b>صورة لتطبيق:</b> <code>{app_name}</code>",
             parse_mode='HTML'
         )
         
-        confirmation_message = f"""<b>✅ تم إرسال طلبك لحمزه</b>
+        # تأكيد للمستخدم
+        confirm_msg = f"""<b>✅ تم إرسال طلبك لحمزه</b>
 
 <b>📱 اسم التطبيق:</b> <code>{app_name}</code>
 
@@ -237,168 +227,147 @@ async def receive_app_photo(update: Update, context: CallbackContext) -> int:
 
 {CONTACT_INFO}"""
         
-        await update.message.reply_text(
-            confirmation_message,
-            parse_mode='HTML'
-        )
-        
+        await update.message.reply_text(confirm_msg, parse_mode='HTML')
         return ConversationHandler.END
+        
     except Exception as e:
-        logger.error(f"Error in receive_app_photo: {e}")
-        await update.message.reply_text(
-            "<b>❌ حدث خطأ. يرجى المحاولة مرة أخرى.</b>",
-            parse_mode='HTML'
-        )
+        logger.error(f"خطأ في receive_photo: {e}")
+        await update.message.reply_text("<b>❌ حدث خطأ في الإرسال</b>", parse_mode='HTML')
         return ConversationHandler.END
 
-async def cancel(update: Update, context: CallbackContext) -> int:
-    """يلغي المحادثة."""
-    await update.message.reply_text(
-        "<b>تم إلغاء الطلب. يمكنك البدء مرة أخرى باستخدام /start</b>",
-        parse_mode='HTML'
-    )
+async def cancel_command(update: Update, context: CallbackContext) -> int:
+    """إلغاء المحادثة"""
+    await update.message.reply_text("<b>تم إلغاء الطلب</b>", parse_mode='HTML')
     return ConversationHandler.END
 
 async def help_command(update: Update, context: CallbackContext):
-    """يرسل رسالة المساعدة."""
+    """مساعدة"""
     help_text = f"""<b>🤖 أوامر البوت:</b>
 
-<b>/start</b> - بدء طلب تطبيق جديد
-<b>/id</b> - معرفة رقم ID الخاص بك
-<b>/help</b> - عرض هذه الرسالة
-<b>/cancel</b> - إلغاء الطلب الحالي
+<b>/start</b> - بدء طلب جديد
+<b>/id</b> - معرفة ID الخاص بك
+<b>/status</b> - حالة البوت
+<b>/help</b> - هذه الرسالة
+<b>/cancel</b> - إلغاء الطلب
 
 <b>👨‍💻 المطور:</b> حمزه {DEVELOPER_USERNAME}"""
     
     await update.message.reply_text(help_text, parse_mode='HTML')
 
+async def id_command(update: Update, context: CallbackContext):
+    """عرض ID"""
+    user = update.effective_user
+    await update.message.reply_text(
+        f"<b>👤 ID الخاص بك: {user.id}</b>",
+        parse_mode='HTML'
+    )
+
 async def status_command(update: Update, context: CallbackContext):
-    """عرض حالة البوت."""
-    uptime = time.time() - bot_start_time
-    hours, remainder = divmod(uptime, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    """حالة البوت"""
+    uptime = int(time.time() - bot_start_time)
+    hours = uptime // 3600
+    minutes = (uptime % 3600) // 60
     
     status_text = f"""<b>🤖 حالة البوت:</b>
 
-<b>✅ البوت يعمل بنجاح</b>
-<b>⏰ وقت التشغيل:</b> {int(hours)}س {int(minutes)}د {int(seconds)}ث
-<b>📊 عدد الطلبات:</b> {request_count}
-<b>🕒 آخر تحديث:</b> {time.strftime('%H:%M:%S')}
-
-<b>🌐 مستضاف على:</b> Render.com"""
+<b>✅ البوت يعمل</b>
+<b>⏰ وقت التشغيل:</b> {hours}س {minutes}د
+<b>📊 الطلبات:</b> {request_count}
+<b>🌐 المستضاف:</b> Render.com
+<b>🕒 الوقت:</b> {datetime.now().strftime('%H:%M:%S')}"""
     
     await update.message.reply_text(status_text, parse_mode='HTML')
 
-# ===== وظائف Keep-Alive =====
+# ===== Keep-Alive System =====
 def keep_alive_ping():
-    """إرسال طلبات Keep-Alive إلى Render."""
-    try:
-        port = os.environ.get('PORT', '10000')
-        render_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://0.0.0.0:{port}')
-        
-        # محاولة ping للرابط
-        response = requests.get(f'{render_url}/keepalive', timeout=10)
-        current_time = time.strftime('%H:%M:%S')
-        
-        if response.status_code == 200:
-            print(f"[{current_time}] ✅ Keep-Alive successful")
-            logger.info(f"Keep-Alive successful at {current_time}")
-        else:
-            print(f"[{current_time}] ⚠️ Keep-Alive status: {response.status_code}")
-            logger.warning(f"Keep-Alive status: {response.status_code}")
-    except Exception as e:
-        current_time = time.strftime('%H:%M:%S')
-        print(f"[{current_time}] ❌ Keep-Alive failed: {e}")
-        logger.error(f"Keep-Alive failed: {e}")
-
-def keep_alive_loop():
-    """حلقة Keep-Alive."""
+    """نظام Keep-Alive"""
     while True:
         try:
-            keep_alive_ping()
-            # الانتظار 5 دقائق (أقل من 15 دقيقة ليتفادى سكون Render)
-            time.sleep(300)
-        except Exception as e:
-            logger.error(f"Error in keep_alive_loop: {e}")
-            time.sleep(60)
+            port = os.getenv('PORT', 8080)
+            requests.get(f'http://localhost:{port}/ping', timeout=5)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Keep-alive ping")
+        except:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Ping failed")
+        time.sleep(300)  # كل 5 دقائق
 
-# ===== وظيفة التشغيل الرئيسية =====
-def run_bot():
-    """تشغيل البوت مع معالجة الأخطاء."""
-    TOKEN = "8494446795:AAHMAZFOI-KHtxSwLAxBtShQxd0c5yhnmC4"
+# ===== تشغيل البوت =====
+def run_telegram_bot():
+    """تشغيل بوت Telegram"""
+    global bot_active
     
     print("\n" + "="*60)
-    print("🤖 بدء تشغيل بوت تلقي طلبات التطبيقات")
+    print("🤖 بوت تلقي طلبات التطبيقات")
     print("="*60)
-    print(f"⏰ وقت البدء: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🔧 إصدار python-telegram-bot: 20.7")
+    print(f"المطور: {DEVELOPER_USERNAME}")
+    print(f"الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
     
     try:
-        # إنشاء تطبيق Telegram
+        # إنشاء التطبيق
         application = Application.builder().token(TOKEN).build()
+        print("✅ تم إنشاء تطبيق Telegram")
         
         # إعداد معالج المحادثة
         conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', start)],
+            entry_points=[CommandHandler('start', start_command)],
             states={
-                APP_NAME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, receive_app_name)
-                ],
-                APP_PHOTO: [
-                    MessageHandler(filters.PHOTO, receive_app_photo)
-                ],
+                APP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
+                APP_PHOTO: [MessageHandler(filters.PHOTO, receive_photo)],
             },
-            fallbacks=[CommandHandler('cancel', cancel)],
+            fallbacks=[CommandHandler('cancel', cancel_command)],
         )
         
-        # إضافة المعالجات
+        # إضافة handlers
         application.add_handler(conv_handler)
-        application.add_handler(CommandHandler("id", get_id))
         application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("id", id_command))
         application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(CommandHandler("cancel", cancel))
+        application.add_handler(CommandHandler("cancel", cancel_command))
         
-        print("✅ تم إنشاء تطبيق Telegram بنجاح")
-        print("📱 جاري بدء استقبال الرسائل...")
+        print("✅ تم إعداد handlers البوت")
+        print("🚀 جاري بدء البوت...")
+        
+        bot_active = True
+        print("✅ البوت يعمل الآن!")
+        print("📱 أرسل /start للبدء")
         
         # بدء البوت
         application.run_polling(
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            close_loop=False
+            close_loop=False,
+            stop_signals=None  # لمنع الإغلاق التلقائي
         )
         
     except Exception as e:
-        print(f"❌ خطأ في تشغيل البوت: {e}")
-        logger.error(f"Bot startup error: {e}")
+        bot_active = False
+        print(f"❌ خطأ في البوت: {e}")
+        logger.error(f"Bot error: {e}")
         
-        # محاولة إعادة التشغيل بعد 30 ثانية
-        print("🔄 جاري إعادة التشغيل بعد 30 ثانية...")
-        time.sleep(30)
-        run_bot()
+        # إعادة التشغيل بعد 10 ثواني
+        print("🔄 إعادة التشغيل بعد 10 ثواني...")
+        time.sleep(10)
+        run_telegram_bot()
 
+# ===== الدالة الرئيسية =====
 def main():
-    """الدالة الرئيسية."""
+    """الدالة الرئيسية"""
     
-    # بدء Flask في thread منفصل
+    # بدء Flask في thread
     print("🚀 بدء خادم Flask...")
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # انتظار لبدء Flask
+    # انتظار بدء Flask
     time.sleep(3)
     
-    # بدء Keep-Alive في thread منفصل
+    # بدء Keep-Alive
     print("🔄 بدء نظام Keep-Alive...")
-    keep_alive_thread = threading.Thread(target=keep_alive_loop, daemon=True)
+    keep_alive_thread = threading.Thread(target=keep_alive_ping, daemon=True)
     keep_alive_thread.start()
     
-    print("⏳ جاري بدء البوت...")
-    time.sleep(2)
-    
     # بدء البوت
-    run_bot()
+    print("🤖 بدء تشغيل بوت Telegram...")
+    run_telegram_bot()
 
 if __name__ == '__main__':
     main()
